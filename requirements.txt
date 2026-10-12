@@ -1,0 +1,8 @@
+torch
+pennylane
+numpy
+scipy
+scikit-learn
+pandas
+matplotlib
+wfdb

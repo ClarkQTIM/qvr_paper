@@ -1,0 +1,23 @@
+{
+  "_note": "QVR selection grid (PAPER_PLAN §5). Register in ANALYSIS_PLAN §12 before the first real run; do not edit afterwards without a §11 entry.",
+  "selection_seeds": [0, 1],
+  "final_seeds": [0, 1, 2, 3, 4],
+  "train": {"max_samples": 50000, "batch_size": 8},
+  "univariate": {
+    "n_qubits": 3, "n_layers": [1, 3, 5], "N_E": [1, 10], "cost": ["outside", "inside"],
+    "embedding": ["ry_all", "ry_first"], "ansatz": ["chain"], "lr": [0.01, 0.003]
+  },
+  "multichannel": {
+    "n_layers": [1, 3, 5], "N_E": [1, 10], "cost": ["outside", "inside"],
+    "embedding": ["rx_per_qubit"], "ansatz": ["chain", "sel"], "lr": [0.01, 0.003]
+  },
+  "reference": {
+    "univariate": {"n_qubits": 3, "n_layers": 3, "N_E": 10, "embedding": "ry_all", "ansatz": "chain",
+                   "cost": "outside", "lr": 0.01},
+    "multichannel": {"n_layers": 3, "N_E": 10, "embedding": "rx_per_qubit", "ansatz": "sel",
+                     "cost": "outside", "lr": 0.01}
+  },
+  "fixed": {"k": null, "tau": 1.0, "sigma_lambda": 0.01, "draw_mode": "mc"},
+  "teardown": {"n_grid": 360, "n_rand": 2000, "n_mc": 4000, "n_perm": 200, "readout_n_fit": 5000},
+  "n_boot": 1000
+}

@@ -1,0 +1,36 @@
+{
+ "_note": "One entry per dataset. data_dir = split directory written by prepare.py. channels: null = all.",
+ "mitbih": {
+  "data_dir": "data_splits/mitbih",
+  "channels": [
+   0
+  ],
+  "role": "independent real data"
+ },
+ "baker": {
+  "data_dir": "data_splits/baker",
+  "channels": null,
+  "role": "published claim (Baker et al.; normals-only scaling)"
+ },
+ "gw": {
+  "data_dir": "data_splits/gw",
+  "channels": [
+   0
+  ],
+  "role": "published claim (QVR4GW; needs noise data)"
+ },
+ "synthetic": {
+  "data_dir": "data_splits/synthetic",
+  "channels": [
+   0
+  ],
+  "role": "appendix sanity set"
+ },
+ "memory": {
+  "data_dir": "data_splits/memory",
+  "channels": [
+   0
+  ],
+  "role": "appendix (order-only anomalies)"
+ }
+}

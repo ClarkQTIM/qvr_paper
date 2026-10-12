@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+data_splits/
+results/
+results_*/
+logs/
+logs_*/
+paper_quick/
+*.npz
+*.pt
+data_raw/

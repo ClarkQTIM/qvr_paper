@@ -1,0 +1,90 @@
+{
+ "_note": "QUICK grid for pipeline tests only. Never report results from it.",
+ "selection_seeds": [
+  0
+ ],
+ "final_seeds": [
+  0,
+  1
+ ],
+ "train": {
+  "max_samples": 400,
+  "batch_size": 8
+ },
+ "univariate": {
+  "n_qubits": 3,
+  "n_layers": [
+   1,
+   2
+  ],
+  "N_E": [
+   2
+  ],
+  "cost": [
+   "outside"
+  ],
+  "embedding": [
+   "ry_all"
+  ],
+  "ansatz": [
+   "chain"
+  ],
+  "lr": [
+   0.01
+  ]
+ },
+ "multichannel": {
+  "n_layers": [
+   1,
+   2
+  ],
+  "N_E": [
+   2
+  ],
+  "cost": [
+   "outside"
+  ],
+  "embedding": [
+   "rx_per_qubit"
+  ],
+  "ansatz": [
+   "chain"
+  ],
+  "lr": [
+   0.01
+  ]
+ },
+ "reference": {
+  "univariate": {
+   "n_qubits": 3,
+   "n_layers": 2,
+   "N_E": 2,
+   "embedding": "ry_all",
+   "ansatz": "chain",
+   "cost": "outside",
+   "lr": 0.01
+  },
+  "multichannel": {
+   "n_layers": 2,
+   "N_E": 2,
+   "embedding": "rx_per_qubit",
+   "ansatz": "sel",
+   "cost": "outside",
+   "lr": 0.01
+  }
+ },
+ "fixed": {
+  "k": null,
+  "tau": 1.0,
+  "sigma_lambda": 0.01,
+  "draw_mode": "mc"
+ },
+ "teardown": {
+  "n_grid": 96,
+  "n_rand": 300,
+  "n_mc": 400,
+  "n_perm": 20,
+  "readout_n_fit": 300
+ },
+ "n_boot": 100
+}
