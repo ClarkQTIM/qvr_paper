@@ -1,6 +1,6 @@
 # Proposed §12.4 — paper pipeline (to append to ANALYSIS_PLAN.md §12 before the first real run)
 
-Status: PROPOSED 2026-10-12. Review, edit, then paste into `ANALYSIS_PLAN.md` §12
+Status: REGISTERED 2026-10-12.
 (above §11) and commit before `./run_all.sh` touches real data. Once committed,
 changes need a §11 entry.
 
