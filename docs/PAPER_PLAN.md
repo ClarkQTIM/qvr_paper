@@ -1,6 +1,6 @@
 # Paper plan — QVR audit (living document)
 
-*Updated 2026-10-12: cervical dropped; new minimal repo `qvr_paper`.*
+*Updated 2026-10-12: cervical dropped; new minimal repo `qvr_paper`. Updated 2026-10-27: C4 reworded after the registered MIT-BIH and Baker runs (see docs/results_*.md).*
 
 Supersedes the per-experiment scripts as the organising document for the paper.
 `ANALYSIS_PLAN.md` stays the frozen record of what was registered and when;
@@ -16,7 +16,7 @@ read.
 | C1 | **The published results don't hold up; the evaluation produced them.** | Baker: not reproduced (best 0.717 over about 400 models); pooled global scaling; a one-number baseline reaches the published BA. GW: separate per-set scaling plus thresholds tuned on the test anomalies; saved scores reproduced exactly from the authors' weights; signal-free surrogates "detect" equally well. | Server re-run of the GW forensics; the GW noise file (closes the filtered-noise offset). |
 | C2 | **QVR is exactly a per-timepoint Fourier model with no memory.** | E-F1: ⟨Z⟩ is exactly degree K in each value, the score term exactly degree 2K, `identity` gives ⟨Z⟩ = cos x; the score is additive over t (Fact 2). Confirmed on the GW authors' trained weights (degree 1 / 2). p̄_b is a linear map of six moments (Fact 1). | E-F1 on every trained model of every dataset (automated in `run.py`). |
 | C3 | **D, the draws and σ contribute little.** | In expectation the draws only damp coherences by exp(−½ Var·t²) (derived and verified). `identity` = full model on Baker. σ collapses under the paper objective and is uninformative relative to init (E5, MIT-BIH). | D-mode table on all datasets. **σ = 0 training ablation** (does learning σ help training at all?). |
-| C4 | **Simple classical models match or beat QVR, including QVR's own reduced form.** | MIT-BIH: native 0.572 vs classical 0.70–0.72; Baker (normals-only scaling): `identity` = full. Test A: better readouts of the same circuit reach 0.70–0.75. | One table, all datasets, under one protocol, with QVR tuned (selection grid) and comparators given the same tuning budget. |
+| C4 | **QVR's performance is explained by its classical Fourier reduction.** Where QVR loses, generic classical detectors beat it; where it wins, its D = 0 classical reduction (cos x, one global centre) wins by more. | MIT-BIH (registered run): QVR 0.690 vs Mahalanobis 0.775; its D = 0 form 0.660. Baker (registered run): QVR 0.729 beats every generic detector (best kNN 0.713) but D = 0 gives 0.764, identical across seeds. Test A: readouts beat the native score on MIT-BIH (0.786) but not on Baker (0.628). | A third main dataset (GW via GWOSC, or another public set). |
 | C5 | **The QVR fingerprint carries nothing beyond six Fourier moments of the input.** | MIT-BIH: p̄_b 0.810 ≈ six moments 0.815 (raw beat 0.945); Fact 1 says it cannot do better. | Same probe on every dataset with subtypes, automated. |
 
 Not claimed: anything about quantum hardware, the Fisher analysis, or sQVR
