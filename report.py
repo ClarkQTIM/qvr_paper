@@ -56,7 +56,7 @@ def build_report(r) -> dict:
         return lambda ks: np.concatenate([B[f'{name}__{k}'] for k in ks])
 
     rows = list(QVR_ROWS) + base_methods
-    rep = {'dataset': sp.manifest.get('name', sp.path), 'data_dir': sp.path, 'T': sp.T,
+    rep = {'dataset': sp.manifest.get('name') or str(sp.path).rstrip('/').split('/')[-1], 'data_dir': sp.path, 'T': sp.T,
            'n_channels': sp.n_channels, 'test_sets': tests, 'final_seeds': seeds,
            'n': {k: int(len(v)) for k, v in sp.X.items()}}
 
@@ -148,14 +148,27 @@ def build_report(r) -> dict:
         rep['probes']['pbar_best'] = {'macro_auc': _ms(pb), 'first_seed': first}
 
     # -- null guard --------------------------------------------------------------------
+    # Observed: one fixed split (seed 0) of test-normal units into halves. Calibration
+    # (DEVIATIONS D2, 2026-10-14): the same statistic over N random unit splits; with few
+    # units, patient-to-patient differences alone produce sizeable deviations.
     un = sp.units['Xte_norm']
-    yn = null_halves(un, seed=0)
-    dev = {}
-    if len(np.unique(yn)) == 2:
-        for m in rows:
-            dev[m] = roc_auc(yn, getter(m)(['Xte_norm']))
+    vecs = {m: getter(m)(['Xte_norm']) for m in rows}
+    def max_dev(seed):
+        yy = null_halves(un, seed=seed)
+        if len(np.unique(yy)) < 2:
+            return None, {}
+        a = {m: roc_auc(yy, v) for m, v in vecs.items()}
+        return max(abs(x - 0.5) for x in a.values()), a
+    obs, dev = max_dev(0)
+    n_cal = grid.get('null_guard_splits', 200)
+    cal = np.array([d for d in (max_dev(k)[0] for k in range(1, n_cal + 1)) if d is not None])
     rep['null_guard'] = {'auc': dev, 'n_units': int(len(np.unique(un))),
-                         'max_abs_dev': float(max(abs(v - 0.5) for v in dev.values())) if dev else float('nan')}
+                         'max_abs_dev': float(obs) if obs is not None else float('nan'),
+                         'calibration': {'n_splits': int(len(cal)),
+                                         'median': float(np.median(cal)) if len(cal) else float('nan'),
+                                         'p95': float(np.quantile(cal, 0.95)) if len(cal) else float('nan'),
+                                         'percentile_of_observed': float(np.mean(cal <= obs)) if len(cal) and obs is not None
+                                         else float('nan')}}
 
     # -- selection -----------------------------------------------------------------------
     sel = json.loads((out / 'select' / 'selection.json').read_text())
@@ -164,7 +177,48 @@ def build_report(r) -> dict:
                         'selected_on_val': sel['selected_on_val'],
                         'qvr_top': [{k: t[k] for k in ('tag', 'val_auc_mean')} for t in sel['table'][:8]],
                         'baselines': {m: {'hp': v['hp'], 'val_auc': v['val_auc']} for m, v in bsel.items()}}
+    rep['scorecard'] = scorecard(rep, base_methods)
     return rep
+
+
+def scorecard(rep, base_methods) -> dict:
+    """Registered predictions (docs/REGISTRATION.md) evaluated mechanically, with the
+    definitions fixed in docs/DEVIATIONS.md (D1: best classical = selected on validation;
+    D2: null guard also judged against its own unit-split calibration)."""
+    P = rep['main']['pooled']
+    q = P['qvr_best']['auc']
+    bsel = rep['selection']['baselines']
+    best_val = max(base_methods, key=lambda m: bsel[m]['val_auc'] if np.isfinite(bsel[m]['val_auc']) else -1)
+    best_test = max(base_methods, key=lambda m: P[m]['auc'])
+    d_val, d_test = P[best_val]['vs_qvr_best'], P[best_test]['vs_qvr_best']
+    s0 = P['qvr_sigma0']['vs_qvr_best']
+    ro = max(P[m]['auc'] for m in ('qvr_best_ro_tz2_z', 'qvr_best_ro_mahal_zmean', 'qvr_best_ro_mahal_pbar'))
+    pr = rep['probes']
+    ng = rep['null_guard']
+    c = {}
+    c['P1'] = {'pass': rep['fourier']['all_hold_fraction'] == 1.0, 'value': rep['fourier']['all_hold_fraction']}
+    c['P2'] = {'pass': c['P1']['pass'], 'value': 'part of P1 verdicts'}
+    c['P3'] = {'pass': d_val['lo'] > -0.02, 'value': f"{best_val} (val-selected): Δ {d_val['diff']:+.3f} [{d_val['lo']:+.3f}, {d_val['hi']:+.3f}]",
+               'also': f"{best_test} (best on test): Δ {d_test['diff']:+.3f} [{d_test['lo']:+.3f}, {d_test['hi']:+.3f}]"}
+    c['P4'] = {'pass': P['trig_t']['auc'] >= q - 0.02, 'value': f"trig_t {P['trig_t']['auc']:.3f} vs QVR {q:.3f}"}
+    c['P5'] = {'pass': abs(P['qvr_best_identity']['auc'] - q) <= 0.05,
+               'value': f"identity {P['qvr_best_identity']['auc']:.3f} vs QVR {q:.3f}"}
+    c['P6'] = {'pass': s0['lo'] <= 0 <= s0['hi'] or s0['lo'] > 0,
+               'value': f"σ0 − QVR {s0['diff']:+.3f} [{s0['lo']:+.3f}, {s0['hi']:+.3f}]"}
+    c['P7'] = {'pass': ro > q, 'value': f"best readout {ro:.3f} vs QVR {q:.3f}"}
+    if 'skipped' in pr:
+        c['P8'] = {'pass': None, 'value': 'no probes'}
+    else:
+        mo = pr['moments']['logreg']['macro_auc'] if pr.get('moments') else float('nan')
+        pb = pr['pbar_best']['macro_auc']['mean']
+        c['P8'] = {'pass': pb <= mo + 0.02, 'value': f"p̄_b {pb:.3f} vs moments {mo:.3f}"}
+    cal = ng['calibration']
+    c['P9'] = {'pass': (ng['max_abs_dev'] <= 0.10) if ng['n_units'] >= 20 else None,
+               'value': f"max deviation {ng['max_abs_dev']:.3f} ({ng['n_units']} units)",
+               'calibrated_pass': ng['max_abs_dev'] < cal['p95'] if np.isfinite(cal['p95']) else None,
+               'calibrated': f"percentile {cal['percentile_of_observed']:.0%} of {cal['n_splits']} unit splits "
+                             f"(median {cal['median']:.3f}, 95th {cal['p95']:.3f})"}
+    return c
 
 
 def _ms(v):
@@ -186,6 +240,18 @@ def to_markdown(rep) -> str:
          f"seeds {rep['final_seeds']} · test sets {', '.join(rep['test_sets'])}", '',
          'Sizes: ' + ', '.join(f'{k} {v:,}' for k, v in rep['n'].items()), '']
     sel = rep['selection']
+    sc = rep['scorecard']
+    mark = lambda v: '—' if v is None else ('✅' if v else '❌')  # noqa: E731
+    L += ['## Registered predictions (docs/REGISTRATION.md; definitions per docs/DEVIATIONS.md)', '',
+          '| ID | holds | value |', '|---|---|---|']
+    for k, v in sc.items():
+        extra = ''
+        if k == 'P3':
+            extra = f" · also {v['also']}"
+        if k == 'P9':
+            extra = f" · calibrated {mark(v['calibrated_pass'])}: {v['calibrated']}"
+        L.append(f"| {k} | {mark(v['pass'])} | {v['value']}{extra} |")
+    L += ['']
     L += ['## Selection', '',
           f"QVR winner ({'best validation AUC' if sel['selected_on_val'] else 'NOT selected: no validation sets, reference config used'}): "
           f"`{json.dumps(sel['qvr_winner'])}`", '']
@@ -240,8 +306,11 @@ def to_markdown(rep) -> str:
               f"| QVR p̄_b (first seed) | {pr(p['pbar_best']['first_seed'])} |",
               f"| QVR p̄_b (mean over seeds) | {_f(p['pbar_best']['macro_auc']['mean'])} |"]
     ng = rep['null_guard']
+    cal = ng['calibration']
     L += ['', '## Protocol — null guard (test normals vs test normals, split by unit)', '',
-          f"Max |AUC − 0.5| over all methods: {_f(ng['max_abs_dev'])} ({ng['n_units']} units).", '']
+          f"Max deviation of AUC from 0.5 over all methods: {_f(ng['max_abs_dev'])} ({ng['n_units']} units). "
+          f"Calibration over {cal['n_splits']} random unit splits: median {_f(cal['median'])}, 95th percentile "
+          f"{_f(cal['p95'])}; observed at the {cal['percentile_of_observed']:.0%} percentile.", '']
     L += ['## Baseline hyperparameters (selected on validation)', '',
           '| method | hp | val AUC |', '|---|---|---|'] + \
          [f"| {m} | {v['hp']} | {_f(v['val_auc'])} |" for m, v in sel['baselines'].items()]

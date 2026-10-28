@@ -1,0 +1,2 @@
+dataset,null guard: max deviation of AUC from 0.5,units,"QVR AUC, time-permuted",ΔAUC (orig − permuted)
+mitbih,0.118,22,0.683,0.009

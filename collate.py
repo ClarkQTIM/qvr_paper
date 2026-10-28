@@ -10,6 +10,7 @@ Tables (paper/tables/<name>.md and .csv), one per claim:
   T4_fourier       Fourier exactness and damping across all trained models        C2, C3
   T5_probes        subtype probes: p̄_b vs six moments vs raw                      C5
   T6_protocol      null guard and order sensitivity                               protocol, C2
+  T7_predictions   registered predictions P1–P9, mechanically scored
 Figures (paper/figures/):
   fig_main.png     dot plot of T1 with CIs
   fig_fourier.png  min R² by trig degree for z and the score term
@@ -121,6 +122,25 @@ def collate(results, out, datasets=None):
              _f(reps[d]['order']['auc_permuted']['mean']), _f(reps[d]['order']['delta_auc']['mean'])] for d in ds]
     md.append(_write(out, 'T6_protocol', ['dataset', 'null guard: max deviation of AUC from 0.5', 'units', 'QVR AUC, time-permuted',
                                           'ΔAUC (orig − permuted)'], rows))
+    # T7 registered predictions
+    mark = lambda v: '—' if v is None else ('holds' if v else 'FAILS')  # noqa: E731
+    ids = sorted({k for d in ds for k in reps[d].get('scorecard', {})}, key=lambda k: int(k[1:]))
+    rows = []
+    for k in ids:
+        row = [k]
+        for d in ds:
+            v = reps[d].get('scorecard', {}).get(k)
+            if v is None:
+                row.append('—')
+                continue
+            cell = f"{mark(v['pass'])}: {v['value']}"
+            if k == 'P9':
+                cell += f" (calibrated: {mark(v['calibrated_pass'])}, {v['calibrated']})"
+            row.append(cell)
+        rows.append(row)
+    if rows:
+        md.append(_write(out, 'T7_predictions', ['prediction'] + ds, rows,
+                         'Registered predictions (docs/REGISTRATION.md), definitions per docs/DEVIATIONS.md.'))
     (out / 'tables' / 'ALL.md').write_text('\n\n'.join(md) + '\n')
     figures(reps, out)
     print(f'  → {out / "tables"} ({len(md)} tables), {out / "figures"}')
