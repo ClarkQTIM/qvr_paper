@@ -12,6 +12,7 @@ published pipelines, and collate the tables.
 ## Reproduce
 
 ```bash
+source scratch_env.sh        # caches, config and temp files go to scratch, never home
 pyenv install 3.12.0 && pyenv virtualenv 3.12.0 qml && pyenv activate qml   # versions: environment.lock.txt
 pip install -r requirements.txt
 SELFTEST=1 DATASETS="" ./run_all.sh                      # every self-test

@@ -11,6 +11,8 @@
 # (python prepare.py <dataset> ...). Every stage is resumable: re-running skips finished work.
 set -euo pipefail
 cd "$(dirname "$0")"
+# keep caches/config/temp files off the home directory
+[[ -f scratch_env.sh ]] && source scratch_env.sh
 
 DATASETS=${DATASETS-"mitbih baker gw synthetic memory"}   # DATASETS="" → self-tests only
 STAGES=${STAGES:-"select train score baselines teardown report"}

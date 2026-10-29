@@ -491,7 +491,9 @@ def gw_filter(x, fs=FS, band=(50.0, 250.0), notches=(60.0, 120.0, 180.0, 240.0),
 
 def _gwpy_fetch(start, end, detector='L1'):
     from gwpy.timeseries import TimeSeries
-    ts = TimeSeries.fetch_open_data(detector, start, end, sample_rate=FS, cache=True, verbose=False)
+    # cache=False: no astropy download cache (it defaults to the home directory); our own
+    # per-event cache lives in --raw-dir on scratch
+    ts = TimeSeries.fetch_open_data(detector, start, end, sample_rate=FS, cache=False, verbose=False)
     if abs(float(ts.sample_rate.value) - FS) > 1e-6:
         raise ValueError(f'sample rate {ts.sample_rate}')
     return np.asarray(ts.value, dtype=np.float64)
