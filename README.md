@@ -12,14 +12,15 @@ published pipelines, and collate the tables.
 ## Reproduce
 
 ```bash
-conda create -n qml python=3.12 && conda activate qml && pip install -r requirements.txt
+pyenv install 3.12.0 && pyenv virtualenv 3.12.0 qml && pyenv activate qml   # versions: environment.lock.txt
+pip install -r requirements.txt
 SELFTEST=1 DATASETS="" ./run_all.sh                      # every self-test
 
 # data → split folders (once)
 python prepare.py mitbih    --db-dir <mitdb 1.0.0 dir> --out data_splits/mitbih
 python forensics/baker_build_sets.py --repo-data <QuantumVariationalRewinding/data> --out-root data_raw/baker_sets
 python prepare.py baker     --sets-dir data_raw/baker_sets/bi_train782 --out data_splits/baker
-python prepare.py gw        --events <events.pkl> --noise <noise.pkl> --out data_splits/gw
+python prepare.py gw-gwosc  --out data_splits/gw          # rebuilt from public LIGO data (docs/DEVIATIONS.md D5)
 python prepare.py synthetic --out data_splits/synthetic
 python prepare.py memory    --out data_splits/memory
 

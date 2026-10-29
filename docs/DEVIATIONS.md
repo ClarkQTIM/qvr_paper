@@ -72,3 +72,34 @@ files are untouched; only the `report` stage was re-run to regenerate
 `qvr_final` split with identical labels, units, subtypes and shapes. Float values
 differ at about 1e-13 (normalizer bounds; zero-phase filtering numerics), so byte
 hashes differ. Exact reproduction requires `environment.lock.txt`.
+
+## D5 — 2026-10-29 — GW dataset defined (written before any GW data is prepared or run)
+
+**Seen at the time:** MIT-BIH and Baker results; the QVR4GW paper text. No GW data
+under our protocol.
+
+**Change.** The registration listed GW "once noise data exist". The authors' noise
+file is not in their repository, and we did not request it. GW is instead rebuilt
+from public LIGO open data (GWOSC) by `prepare.py gw-gwosc`, following the recipe in
+the paper (Rodrigues de Miranda et al., QMI 2025, Secs. 6 and 8):
+- L1, observing run O3 (GPS 1238166018–1269363618), 1-s windows at 4096 Hz;
+- events: every GWOSC GWTC-2.1 / GWTC-3 catalog event in O3 with L1 data (confident,
+  marginal, auxiliary), placed off-centre by U(−0.25, 0.25) s;
+- noise: windows starting at uniform random times 100–999 s after an event;
+- filter: band-pass 50–250 Hz plus notches at 60/120/180/240 Hz.
+
+**Choices the paper leaves open, fixed here:**
+- Filter design: Butterworth order 8, zero-phase; notch Q = 30; applied to the padded
+  segment before cutting.
+- Units: an event's neighbourhood (the event plus its noise windows), split
+  40/30/30 into train/val/test. Validation and test anomalies are **disjoint**,
+  unlike the paper. Training-unit events are unused.
+- 100 noise windows per event; decimation ×4 (anti-aliased FIR) to T = 1024. This
+  is lossless for content ≤ 250 Hz (Nyquist 512 Hz) and makes the registered grid
+  computationally feasible.
+- One normalizer (per-timepoint 0.5/99.5% quantiles) fit on training noise only.
+
+**Unchanged:** the registered grid, protocol and predictions P1–P9 (P8 not
+applicable; no subtypes). The event count may differ from the paper's 78, depending
+on current GWOSC catalogs; the manifest records the list. The forensic GW results
+(the authors' saved scores and weights) are separate and unaffected.

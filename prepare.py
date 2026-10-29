@@ -447,6 +447,158 @@ def prepare_gw(events_path, noise_path, out, fractions=(0.7, 0.15, 0.15), downsa
     return manifest
 
 
+# ---------------------------------------------------------------------------
+# Gravitational waves rebuilt from public LIGO data (GWOSC), following the
+# QVR4GW paper's recipe (Rodrigues de Miranda et al., QMI 2025, Secs. 6 and 8)
+# ---------------------------------------------------------------------------
+
+GPS_O3_START, GPS_O3_END = 1238166018, 1269363618      # 2019-04-01 … 2020-03-27 (their segment lists)
+FS = 4096
+
+
+def list_o3_events(catalogs=None, detector='L1'):
+    """[(name, gps)] for catalog events in O3 with data from `detector`.
+    Default catalogs: every GWOSC catalog named GWTC-2.1-* or GWTC-3-* (confident, marginal,
+    auxiliary: the paper's 'auxiliary, marginal, or confident' categories)."""
+    from gwosc import datasets as D
+    if catalogs is None:
+        catalogs = sorted(c for c in D.find_datasets(type='catalog') if c.startswith(('GWTC-2.1', 'GWTC-3')))
+    found = {}
+    for c in catalogs:
+        for ev in D.find_datasets(type='event', catalog=c, segment=(GPS_O3_START, GPS_O3_END)):
+            base = ev.split('-v')[0]
+            if base in found:
+                continue
+            try:
+                dets = D.event_detectors(ev)
+            except Exception:                                    # noqa: BLE001
+                dets = {detector}
+            if detector in dets:
+                found[base] = float(D.event_gps(ev))
+    return sorted(found.items(), key=lambda kv: kv[1]), list(catalogs)
+
+
+def gw_filter(x, fs=FS, band=(50.0, 250.0), notches=(60.0, 120.0, 180.0, 240.0), q=30.0):
+    """The paper's filtering, made explicit: zero-phase Butterworth band-pass (order 8) plus
+    zero-phase IIR notches. Applied to a long padded segment before windows are cut."""
+    from scipy.signal import butter, filtfilt, iirnotch, sosfiltfilt
+    y = sosfiltfilt(butter(8, band, btype='band', fs=fs, output='sos'), x)
+    for f0 in notches:
+        b, a = iirnotch(f0, q, fs=fs)
+        y = filtfilt(b, a, y)
+    return y
+
+
+def _gwpy_fetch(start, end, detector='L1'):
+    from gwpy.timeseries import TimeSeries
+    ts = TimeSeries.fetch_open_data(detector, start, end, sample_rate=FS, cache=True, verbose=False)
+    if abs(float(ts.sample_rate.value) - FS) > 1e-6:
+        raise ValueError(f'sample rate {ts.sample_rate}')
+    return np.asarray(ts.value, dtype=np.float64)
+
+
+def prepare_gw_gwosc(out, raw_dir='data_raw/gwosc', n_noise_per_event=100, fractions=(0.4, 0.3, 0.3),
+                     filtered=True, downsample=4, seed=0, catalogs=None, max_events=None, dry_run=False,
+                     fetch=None, events=None, detector='L1'):
+    """
+    Recipe (paper Sec. 6, 8): L1, O3, 1-s windows at 4096 Hz. Events from GWTC-2.1/3
+    (confident, marginal, auxiliary), placed off-centre by U(−0.25, 0.25) s. Noise windows start
+    at random times 100–1000 s after an event. Filtering: band-pass 50–250 Hz + notches at
+    60/120/180/240 Hz (gw_filter). Raw windows are cached per event in raw_dir.
+
+    Our protocol (not the paper's): the UNIT is an event's neighbourhood (the event and its
+    noise windows, which share ~20 min of detector state). Units are split train/val/test by
+    `fractions`; train units give Xtr (their events are not used), val units give Xval_norm /
+    Xval, test units give Xte_norm / Xte_events. One normalizer (per-timepoint quantiles)
+    fit on Xtr and applied to everything. `downsample` uses an anti-aliased FIR decimation;
+    for filtered data (content ≤ 250 Hz) q = 4 (Nyquist 512 Hz) loses nothing.
+    """
+    from math import ceil
+    from scipy.signal import decimate
+    rng = np.random.default_rng(seed)
+    if events is None:
+        events, catalogs = list_o3_events(catalogs, detector)
+    if max_events:
+        events = events[:max_events]
+    if len(events) < 3:
+        raise ValueError(f'only {len(events)} events found')
+    perm = rng.permutation(len(events))
+    n_tr = int(round(len(events) * fractions[0]))
+    n_va = int(round(len(events) * fractions[1]))
+    split_of = {}
+    for rank, i in enumerate(perm):
+        split_of[events[i][0]] = 'train' if rank < n_tr else ('val' if rank < n_tr + n_va else 'test')
+    plan = {'events': len(events), 'by_split': {s: sum(v == s for v in split_of.values()) for s in ('train', 'val', 'test')},
+            'noise_windows_per_event': n_noise_per_event, 'catalogs': catalogs}
+    print(json.dumps(plan, indent=1))
+    if dry_run:
+        for name, gps in events:
+            print(f'  {name:24s} gps {gps:.3f}  → {split_of[name]}')
+        return {'dry_run': True, **plan}
+
+    fetch = fetch or (lambda a, b: _gwpy_fetch(a, b, detector))
+    raw_dir = Path(raw_dir) / ('filtered' if filtered else 'unfiltered')
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    pad = 16.0
+    store = {s: {'noise': [], 'noise_u': [], 'event': [], 'event_u': []} for s in ('train', 'val', 'test')}
+    skipped = {}
+    for k, (name, gps) in enumerate(events):
+        cache = raw_dir / f'{name}.npz'
+        if cache.exists():
+            d = np.load(cache)
+            ev_w, no_w = d['event'], d['noise']
+        else:
+            er = np.random.default_rng([seed, k])                       # per-event stream: resumable
+            t0 = gps - pad
+            try:
+                x = fetch(t0, gps + 1000 + pad)
+            except Exception as e:                                       # noqa: BLE001
+                skipped[name] = f'fetch failed: {type(e).__name__}: {str(e)[:120]}'
+                print(f'  [{k + 1}/{len(events)}] {name}: SKIP ({skipped[name]})', flush=True)
+                continue
+            if not np.isfinite(x).all():
+                skipped[name] = 'non-finite samples (gap)'
+                print(f'  [{k + 1}/{len(events)}] {name}: SKIP (gap)', flush=True)
+                continue
+            y = gw_filter(x) if filtered else x
+            cut = lambda start: y[int(round((start - t0) * FS)):][:FS]   # noqa: E731
+            ev_w = cut(gps - 0.5 + er.uniform(-0.25, 0.25))[None]
+            no_w = np.stack([cut(st) for st in er.uniform(gps + 100, gps + 999, n_noise_per_event)])
+            np.savez(cache, event=ev_w, noise=no_w, gps=gps)
+            print(f'  [{k + 1}/{len(events)}] {name}: fetched, {len(no_w)} noise windows', flush=True)
+        sp = split_of[name]
+        store[sp]['noise'].append(no_w)
+        store[sp]['noise_u'] += [name] * len(no_w)
+        store[sp]['event'].append(ev_w)
+        store[sp]['event_u'] += [name]
+    def stack(a):
+        A = np.concatenate(a)
+        return decimate(A, downsample, ftype='fir', zero_phase=True, axis=1) if downsample > 1 else A
+    split = {'Xtr': ('train', 'noise'), 'Xval_norm': ('val', 'noise'), 'Xval': ('val', 'event'),
+             'Xte_norm': ('test', 'noise'), 'Xte_events': ('test', 'event')}
+    arrays = {k: stack(store[s][kind]) for k, (s, kind) in split.items()}
+    nm = Normalizer.fit(torch.as_tensor(arrays['Xtr']), 'per_timepoint_q', skip_first=False, clip=False)
+    clipped = {k: nm.out_of_range(nm.transform(torch.as_tensor(v))) for k, v in arrays.items()}
+    nm.clip = True
+    sets = {}
+    for k, (s, kind) in split.items():
+        sets[k] = nm.transform(torch.as_tensor(arrays[k])).numpy()[:, None, :]
+        sets[f'{k}_units'] = np.array(store[s][f'{kind}_u'])
+    manifest = {'name': 'gw', 'source': 'GWOSC (public LIGO open data), rebuilt per QVR4GW paper Secs. 6, 8',
+                'detector': detector, 'run': 'O3', 'gps_range': [GPS_O3_START, GPS_O3_END], 'catalogs': catalogs,
+                'events': {n: {'gps': g, 'split': split_of[n]} for n, g in events}, 'skipped': skipped,
+                'window_s': 1.0, 'fs': FS, 'downsample': downsample, 'T': int(arrays['Xtr'].shape[1]),
+                'filter': 'band-pass 50–250 Hz (Butterworth 8, zero-phase) + notches 60/120/180/240 Hz (Q 30)'
+                          if filtered else 'none',
+                'event_offset': 'U(-0.25, 0.25) s', 'noise_starts': 'U(gps + 100, gps + 999) s',
+                'units': 'event neighbourhood (event + its noise windows)', 'fractions': list(fractions),
+                'normalizer': 'per_timepoint_q (0.5%, 99.5%) fit on Xtr only, clipped',
+                'fraction_clipped': clipped, 'seed': seed,
+                'counts': {k: int(len(v)) for k, v in arrays.items()}}
+    _write(out, sets, manifest)
+    return manifest
+
+
 def _self_test():
     import tempfile
     import wfdb
@@ -539,6 +691,42 @@ def _self_test():
               and len(sg.X['Xte_events']) == 10 and sg.T == 32)
         check('gw: one normalizer (fit on Xtr noise) for all sets — events wider, so more of them clip',
               mg['fraction_clipped']['Xte_events'] > mg['fraction_clipped']['Xte_norm'])
+        # gw-gwosc: mocked event list and download (no network); events carry a chirp
+        fake_events = [(f'GW19{i:04d}', 1240000000.0 + 5000 * i) for i in range(10)]
+        calls = []
+
+        def fake_fetch(a, b):
+            calls.append((a, b))
+            n = int(round((b - a) * FS))
+            r = np.random.default_rng(int(a))
+            x = r.normal(0, 1e-21, n)
+            g = next(g for _, g in fake_events if a < g < b)            # chirp at the event time
+            i0 = int(round((g - a) * FS))
+            tt = np.arange(800) / FS
+            x[i0 - 400:i0 + 400] += 5e-21 * np.sin(2 * np.pi * (60 + 150 * tt / tt[-1]) * tt)
+            return x
+        dr = prepare_gw_gwosc(Path(tmp) / 'gwo', raw_dir=Path(tmp) / 'raw', n_noise_per_event=12,
+                              events=fake_events, fetch=fake_fetch, dry_run=True)
+        check('gw-gwosc dry run: plan only, no download', dr['dry_run'] and not calls)
+        mo = prepare_gw_gwosc(Path(tmp) / 'gwo', raw_dir=Path(tmp) / 'raw', n_noise_per_event=12,
+                              events=fake_events, fetch=fake_fetch, downsample=4)
+        so = load_split(Path(tmp) / 'gwo')
+        check('gw-gwosc: T = 1024 after ×4 decimation, all five sets', so.T == 1024 and
+              {'Xtr', 'Xval_norm', 'Xval', 'Xte_norm', 'Xte_events'} <= set(so.X), f"T {so.T}")
+        units = {k: set(so.units[k]) for k in so.X}
+        check('gw-gwosc: event neighbourhoods never cross splits',
+              not (units['Xtr'] & (units['Xval_norm'] | units['Xte_norm']))
+              and not (units['Xval_norm'] & units['Xte_norm'])
+              and units['Xval'] <= units['Xval_norm'] and units['Xte_events'] <= units['Xte_norm'])
+        check('gw-gwosc: training-unit events are not used', sum(len(so.X[k]) for k in ('Xval', 'Xte_events'))
+              == sum(v['split'] != 'train' for v in mo['events'].values()))
+        n_calls = len(calls)
+        prepare_gw_gwosc(Path(tmp) / 'gwo2', raw_dir=Path(tmp) / 'raw', n_noise_per_event=12,
+                         events=fake_events, fetch=fake_fetch, downsample=4)
+        check('gw-gwosc: second run uses the per-event cache (no new downloads)', len(calls) == n_calls)
+        bp = gw_filter(np.sin(2 * np.pi * 10 * np.arange(FS * 4) / FS) + np.sin(2 * np.pi * 150 * np.arange(FS * 4) / FS))
+        sp = np.abs(np.fft.rfft(bp[FS:3 * FS]))
+        check('gw_filter: 10 Hz removed, 150 Hz kept', sp[20] < 0.01 * sp[300], f'{sp[20]:.2f} vs {sp[300]:.2f}')
     print('RESULT:', 'ALL PASS' if ok else 'FAILURES ABOVE')
     if not ok:
         raise SystemExit(1)
@@ -546,12 +734,18 @@ def _self_test():
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('dataset', nargs='?', choices=['mitbih', 'synthetic', 'memory', 'baker', 'gw'])
+    ap.add_argument('dataset', nargs='?', choices=['mitbih', 'synthetic', 'memory', 'baker', 'gw', 'gw-gwosc'])
+    ap.add_argument('--raw-dir', default='data_raw/gwosc', help='gw-gwosc: per-event download cache')
+    ap.add_argument('--noise-per-event', type=int, default=100, help='gw-gwosc')
+    ap.add_argument('--unfiltered', action='store_true', help='gw-gwosc: skip the band-pass/notch filter')
+    ap.add_argument('--max-events', type=int, help='gw-gwosc: only the first N events (smoke tests)')
+    ap.add_argument('--dry-run', action='store_true', help='gw-gwosc: list events and splits, download nothing')
     ap.add_argument('--sets-dir', help='baker: released-scaling set dir (bi_train782 / tri_train782)')
     ap.add_argument('--val-frac', type=float, default=0.15)
     ap.add_argument('--events', help='gw: events pickle (N, T)')
     ap.add_argument('--noise', help='gw: noise pickle (N, T)')
-    ap.add_argument('--gw-downsample', type=int, default=1)
+    ap.add_argument('--gw-downsample', type=int, default=None,
+                    help='gw: keep every k-th sample (default 1); gw-gwosc: FIR decimation factor (default 4)')
     ap.add_argument('--db-dir')
     ap.add_argument('--out')
     ap.add_argument('--seq-len', type=int, help='synthetic only')
@@ -578,8 +772,14 @@ if __name__ == '__main__':
     elif a.dataset == 'baker':
         m = prepare_baker(a.sets_dir, a.out or 'data_splits/baker', a.val_frac)
         print(json.dumps({k: m[k] for k in ('counts', 'fraction_clipped', 'val', 'units')}, indent=1))
+    elif a.dataset == 'gw-gwosc':
+        m = prepare_gw_gwosc(a.out or 'data_splits/gw', raw_dir=a.raw_dir, n_noise_per_event=a.noise_per_event,
+                             filtered=not a.unfiltered, downsample=a.gw_downsample or 4, max_events=a.max_events,
+                             dry_run=a.dry_run)
+        if not m.get('dry_run'):
+            print(json.dumps({k: m[k] for k in ('counts', 'fraction_clipped', 'T', 'skipped')}, indent=1))
     elif a.dataset == 'gw':
-        m = prepare_gw(a.events, a.noise, a.out or 'data_splits/gw', downsample=a.gw_downsample)
+        m = prepare_gw(a.events, a.noise, a.out or 'data_splits/gw', downsample=a.gw_downsample or 1)
         print(json.dumps({k: m[k] for k in ('counts', 'fraction_clipped', 'T')}, indent=1))
         print(json.dumps({k: m[k] for k in ('counts', 'fraction_clipped', 'classes', 'note')}, indent=1))
     else:
