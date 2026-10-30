@@ -103,3 +103,13 @@ the paper (Rodrigues de Miranda et al., QMI 2025, Secs. 6 and 8):
 applicable; no subtypes). The event count may differ from the paper's 78, depending
 on current GWOSC catalogs; the manifest records the list. The forensic GW results
 (the authors' saved scores and weights) are separate and unaffected.
+
+## D6 — 2026-10-30 — collate.py presentation changes (note, not a protocol change)
+
+**Seen at the time:** all three registered runs (MIT-BIH, Baker, GW) and the GW ladder.
+
+`collate.py` only; no training, scoring, baseline, teardown or report code changed, and
+no number changes. T1 gains the mean-⟨Z⟩ Mahalanobis readout row (already in T3). T7
+reports P9 as two rows, the registered threshold and the calibrated verdict (D2). Columns
+are ordered MIT-BIH, Baker, GW. New T8 collects the published-pipeline forensics
+(`forensics/baker_e0.py`, `forensics/gw_ladder.py`) when their outputs exist.

@@ -10,7 +10,12 @@ Tables (paper/tables/<name>.md and .csv), one per claim:
   T4_fourier       Fourier exactness and damping across all trained models        C2, C3
   T5_probes        subtype probes: p̄_b vs six moments vs raw                      C5
   T6_protocol      null guard and order sensitivity                               protocol, C2
-  T7_predictions   registered predictions P1–P9, mechanically scored
+  T7_predictions   registered predictions P1–P9, mechanically scored (P9 registered and calibrated rows)
+  T8_forensics     published claims: Baker E0 reproduction vs baselines; GW ladder (their pipeline,
+                   protocol choices removed one at a time). Read from results/e0/**/baker_e0.json and
+                   results/forensics/gw_ladder/ladder.json when present.
+Columns are ordered mitbih, baker, gw (independent data first, then the published claims),
+then any other dataset.
 Figures (paper/figures/):
   fig_main.png     dot plot of T1 with CIs
   fig_fourier.png  min R² by trig degree for z and the score term
@@ -25,8 +30,9 @@ from pathlib import Path
 
 import numpy as np
 
-MAIN_ORDER = ['qvr_best', 'qvr_ref', 'qvr_best_identity', 'qvr_best_ro_tz2_z', 'qvr_best_ro_mahal_pbar',
-              'onenum', 'temporal', 'tz2', 'trig_t', 'moments', 'mahal', 'pca', 'knn', 'iforest']
+DATASET_ORDER = ['mitbih', 'baker', 'gw', 'synthetic', 'memory']
+MAIN_ORDER = ['qvr_best', 'qvr_ref', 'qvr_best_identity', 'qvr_best_ro_tz2_z', 'qvr_best_ro_mahal_zmean',
+              'qvr_best_ro_mahal_pbar', 'onenum', 'temporal', 'tz2', 'trig_t', 'moments', 'mahal', 'pca', 'knn', 'iforest']
 LABELS = {'qvr_best': 'QVR (tuned)', 'qvr_ref': 'QVR (reference config)', 'qvr_best_identity': 'QVR, D = 0 (cos x)',
           'qvr_best_ro_tz2_z': 'QVR circuit, per-t z² readout', 'qvr_best_ro_mahal_pbar': 'QVR circuit, p̄_b Mahalanobis',
           'qvr_best_ro_mahal_zmean': 'QVR circuit, mean-⟨Z⟩ Mahalanobis', 'qvr_best_mean': 'QVR, D = μ',
@@ -61,6 +67,8 @@ def collate(results, out, datasets=None):
         reps[p.parent.name] = json.loads(p.read_text())
     if not reps:
         raise SystemExit(f'no summary.json under {results}')
+    rank = {d: i for i, d in enumerate(DATASET_ORDER)}
+    reps = dict(sorted(reps.items(), key=lambda kv: (rank.get(kv[0], len(rank)), kv[0])))
     ds = list(reps)
     print(f'collate: {len(ds)} datasets: {", ".join(ds)}')
     md = []
@@ -133,18 +141,72 @@ def collate(results, out, datasets=None):
             if v is None:
                 row.append('—')
                 continue
-            cell = f"{mark(v['pass'])}: {v['value']}"
-            if k == 'P9':
-                cell += f" (calibrated: {mark(v['calibrated_pass'])}, {v['calibrated']})"
-            row.append(cell)
+            row.append(f"{mark(v['pass'])}: {v['value']}")
+        if k == 'P9':
+            row[0] = 'P9 (registered: ≤ 0.10)'
+            rows.append(row)
+            row = ['P9 (calibrated, D2: below 95th pct of 200 unit splits)']
+            for d in ds:
+                v = reps[d].get('scorecard', {}).get(k)
+                row.append('—' if v is None or 'calibrated_pass' not in v
+                           else f"{mark(v['calibrated_pass'])}: {v['calibrated']}")
         rows.append(row)
     if rows:
         md.append(_write(out, 'T7_predictions', ['prediction'] + ds, rows,
                          'Registered predictions (docs/REGISTRATION.md), definitions per docs/DEVIATIONS.md.'))
+    t8 = forensics_table(results, out)
+    if t8:
+        md.append(t8)
     (out / 'tables' / 'ALL.md').write_text('\n\n'.join(md) + '\n')
     figures(reps, out)
     print(f'  → {out / "tables"} ({len(md)} tables), {out / "figures"}')
     return reps
+
+
+GW_PAPER = {'auc': 0.917, 'ba': 0.919}       # Table 3 filtered mean accuracy; AUC from their saved scores
+GW_RUNGS = [('A', 'their protocol: separate scaling, validation events = test events'),
+            ('A_their', 'their protocol, the authors\' own events'),
+            ('A0', 'their protocol, NO SIGNAL (noise windows as "events")'),
+            ('B', 'one scaler fit on training noise'),
+            ('B0', 'one scaler, NO SIGNAL'),
+            ('C', 'one scaler, disjoint validation / test events')]
+
+
+def forensics_table(results, out):
+    """T8 from the forensic outputs, if present. Returns the markdown or ''."""
+    rows = []
+    for f in sorted(Path(results).glob('e0/**/baker_e0.json')):
+        rep = json.loads(f.read_text())
+        tgt = rep.get('targets', {})
+        for var, q in rep.get('qvr', {}).items():
+            vb = [r['eval'][q['score_key']]['val_ba'] for r in q['runs']]
+            t = tgt.get('paper' if var.startswith('paper') else 'notebook', {}).get('val_ba')
+            rows.append(['Baker', f'QVR reproduction, {var} variant ({len(vb)} runs, {f.parent.name})',
+                         _f(t), _f(max(vb)), f'median {_f(float(np.median(vb)))}', '—'])
+        for k, r in rep.get('baselines', {}).items():
+            aucs = [m['auc'] for m in r['sets'].values()]
+            rows.append(['Baker', f'one-line baseline {k} (no training) ({f.parent.name})', '—', _f(r['val_ba']),
+                         '—', f'{_f(float(np.mean(aucs)))} (mean over sets)'])
+    g = Path(results) / 'forensics' / 'gw_ladder' / 'ladder.json'
+    if g.exists():
+        lad = json.loads(g.read_text())
+        rows.append(['GW', 'paper, Table 3 (filtered; 5 runs)', _f(GW_PAPER['ba']), '—',
+                     f"AUC {_f(GW_PAPER['auc'])} (their saved scores)", '—'])
+        for r, lab in GW_RUNGS:
+            if r not in lad:
+                continue
+            v = lad[r]
+            rows.append(['GW', f'rung {r}: {lab}', '—', _f(float(np.mean([x['bal_acc'] for x in v]))),
+                         f"AUC {_f(float(np.mean([x['auc'] for x in v])))} "
+                         f"(folds {', '.join(_f(x['auc']) for x in v)})",
+                         _f(float(np.mean([x['std_auc'] for x in v])))])
+    if not rows:
+        return ''
+    return _write(out, 'T8_forensics', ['claim', 'pipeline', 'published BA', 'reproduced BA', 'QVR, other',
+                                        'one-number baseline AUC'], rows,
+                  'Published pipelines run as written (forensics/). BA = balanced accuracy with the threshold '
+                  'tuned as published. GW one-number baseline = per-series std after the rung\'s scaling '
+                  '(0 or 1 = perfect separation).')
 
 
 def figures(reps, out):
