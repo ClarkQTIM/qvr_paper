@@ -174,19 +174,27 @@ GW_RUNGS = [('A', 'their protocol: separate scaling, validation events = test ev
 
 def forensics_table(results, out):
     """T8 from the forensic outputs, if present. Returns the markdown or ''."""
-    rows = []
+    rows, base_seen, all_runs = [], {}, []
     for f in sorted(Path(results).glob('e0/**/baker_e0.json')):
         rep = json.loads(f.read_text())
         tgt = rep.get('targets', {})
         for var, q in rep.get('qvr', {}).items():
             vb = [r['eval'][q['score_key']]['val_ba'] for r in q['runs']]
+            all_runs += [(v, var, f.parent.name) for v in vb]
             t = tgt.get('paper' if var.startswith('paper') else 'notebook', {}).get('val_ba')
-            rows.append(['Baker', f'QVR reproduction, {var} variant ({len(vb)} runs, {f.parent.name})',
+            rows.append(['Baker', f'QVR reproduction, {var} variant ({len(vb)} runs; {f.parent.name})',
                          _f(t), _f(max(vb)), f'median {_f(float(np.median(vb)))}', '—'])
-        for k, r in rep.get('baselines', {}).items():
+        for k, r in rep.get('baselines', {}).items():            # identical on identical data: list once
             aucs = [m['auc'] for m in r['sets'].values()]
-            rows.append(['Baker', f'one-line baseline {k} (no training) ({f.parent.name})', '—', _f(r['val_ba']),
-                         '—', f'{_f(float(np.mean(aucs)))} (mean over sets)'])
+            key = (k, round(r['val_ba'], 6), round(float(np.mean(aucs)), 6))
+            base_seen.setdefault(key, []).append(f.parent.name)
+    for (k, vba, auc), where in base_seen.items():
+        rows.append(['Baker', f'one-number baseline {k}, no training (data of: {", ".join(where)})', '—',
+                     _f(vba), '—', f'{_f(auc)} (mean over sets)'])
+    if all_runs:
+        best = max(all_runs)
+        rows.append(['Baker', f'**best of all {len(all_runs)} reproduction runs** ({best[1]}; {best[2]})',
+                     '0.820 (paper) / 0.675 (notebook)', _f(best[0]), '—', '—'])
     g = Path(results) / 'forensics' / 'gw_ladder' / 'ladder.json'
     if g.exists():
         lad = json.loads(g.read_text())
